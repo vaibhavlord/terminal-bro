@@ -78,6 +78,8 @@ def local_request(host: str, endpoint: str, payload: Optional[Dict[str, Any]] = 
         raise OllamaError(f"Cannot reach Ollama at {host}. Start it with: ollama serve") from error
     except TimeoutError as error:
         raise OllamaError("Ollama took longer than 120 seconds. Try a smaller local model.") from error
+    except (json.JSONDecodeError, UnicodeDecodeError) as error:
+        raise OllamaError("Ollama returned an invalid JSON response.") from error
 
 
 def get_default_model(host: str) -> str:
@@ -111,9 +113,12 @@ def request_command(host: str, model: str, messages: List[Dict[str, str]]) -> st
         "options": {"temperature": 0.1},
     })
     try:
-        return response["message"]["content"]
+        content = response["message"]["content"]
     except (KeyError, TypeError) as error:
         raise OllamaError("Ollama returned an unexpected response.") from error
+    if not isinstance(content, str):
+        raise OllamaError("Ollama returned an unexpected response: message.content must be a string.")
+    return content
 
 
 def extract_command(text: str) -> str:

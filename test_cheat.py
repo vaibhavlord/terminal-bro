@@ -1,3 +1,4 @@
+import io
 import json
 import subprocess
 import sys
@@ -43,6 +44,36 @@ class CheatTests(unittest.TestCase):
     def test_reads_first_local_model(self):
         with patch("cheat.local_request", return_value={"models": [{"name": "llama3.2:latest"}]}):
             self.assertEqual(cheat.get_default_model("ignored"), "llama3.2:latest")
+
+    def test_decodes_valid_utf8_json_response(self):
+        expected = {"message": {"content": "<command>echo café</command>"}}
+        body = json.dumps(expected, ensure_ascii=False).encode("utf-8")
+        with patch("cheat.urllib.request.urlopen", return_value=io.BytesIO(body)):
+            self.assertEqual(cheat.local_request(cheat.DEFAULT_HOST, "/api/chat"), expected)
+
+    def test_cli_reports_malformed_responses_without_copying_or_executing(self):
+        bodies = [b"not JSON", b"\xff", b"{}", b'{"message": null}']
+        bodies.extend(
+            json.dumps({"message": {"content": content}}).encode("utf-8")
+            for content in (None, 42, False, [], {})
+        )
+        for body in bodies:
+            with self.subTest(body=body):
+                stdout, stderr = io.StringIO(), io.StringIO()
+                with patch("sys.argv", ["cheat", "--model", "local-test", "--copy", "--execute", "show files"]), \
+                     patch("cheat.load_config", return_value={}), \
+                     patch("cheat.urllib.request.urlopen", return_value=io.BytesIO(body)), \
+                     patch("sys.stdout", stdout), patch("sys.stderr", stderr), \
+                     patch("cheat.copy_to_clipboard") as copy, \
+                     patch("builtins.input") as confirmation, \
+                     patch("cheat.subprocess.run") as execute:
+                    self.assertEqual(cheat.main(), 1)
+                self.assertIn("Error: Ollama returned", stderr.getvalue())
+                self.assertNotIn("Traceback", stderr.getvalue())
+                self.assertEqual(stdout.getvalue(), "")
+                copy.assert_not_called()
+                confirmation.assert_not_called()
+                execute.assert_not_called()
 
     def test_rejects_non_local_ollama_hosts(self):
         self.assertEqual(cheat.validate_local_host("http://localhost:11434"), "http://localhost:11434")
